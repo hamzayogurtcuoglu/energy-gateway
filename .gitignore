@@ -1,0 +1,6 @@
+.eebus/
+.energyguard/
+*.exe
+hems.crt
+hems.key
+hems_raw.txt
