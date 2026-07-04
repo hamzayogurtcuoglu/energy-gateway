@@ -1,81 +1,123 @@
-# EEBUS Inverter Simulator
+# EEBUS Inverter Simulator + Matter Gateway
 
-A Go PV-inverter simulator that runs as a real EEBUS device (SHIP/TLS + SPINE).
-It publishes inverter measurements and accepts an active-power production limit
-via the `CS-LPP` use case. A bundled Energy Guard client can write that limit
-over real EEBUS.
+A Go PV-inverter that runs as a **real EEBUS device**, plus a **Matter → EEBUS
+gateway** so you can read live meter values and set a production limit — from
+Matter or plain HTTP. All official libraries (`enbility/eebus-go`, `matter.js`).
 
-## Components
+## Pieces
 
-| Command | Role |
+| Path | What it is |
 | --- | --- |
-| `cmd/eebus-inverter-simulator` | The inverter — EEBUS device, `CS-LPP` server |
-| `cmd/eebus-energyguard` | Energy Guard client that writes a production limit (`EG-LPP`) |
+| `cmd/eebus-inverter-simulator` | The inverter — a real EEBUS device (`cs/lpp` + measurements) |
+| `cmd/eebus-gateway` | Matter→EEBUS bridge: writes the limit (`eg/lpp`), reads the meter (`ma/mpc`), HTTP API |
+| `matter-node/device.js` | Matter On/Off device — the Matter "face" of the limit |
+| `matter-node/controller.js` | Matter controller — commissions the device, interactive `on/off` |
+| `cmd/eebus-energyguard` | Optional: standalone EEBUS limit writer (no Matter) |
 
-## Run the inverter
+## Setup (once)
 
-```powershell
-go run ./cmd/eebus-inverter-simulator -eebus-interface Wi-Fi
-```
+- Install **Go 1.22+** and **Node 20+**.
+- Build Go: `go build ./...`
+- Matter deps: `cd matter-node; npm install`
 
-It listens on EEBUS port `4711` and prints its SKI:
+> Windows: if `go`/`node` aren't found, prepend them for the session:
+> `$env:Path = "$env:ProgramFiles\Go\bin;$env:ProgramFiles\nodejs;$env:Path"`
+
+## How it works
 
 ```text
-real EEBUS inverter service listening port=4711 ski=da8816c2...
+controller.js ──Matter──▶ device.js ──HTTP──▶ gateway ──EEBUS──▶ inverter
 ```
 
-Main flags: `-eebus-port` (4711), `-eebus-interface` (mDNS NIC, e.g. `Wi-Fi`),
-`-remote-ski` (peer to trust), `-nominal-peak-w` (10000), `-battery-capacity-wh` (12000).
+- **Set a limit:** Matter `on` (or `POST /limit`) → gateway writes it over EEBUS → inverter curtails.
+- **Read live values:** `GET /status` → gateway reads power / energy / frequency from the inverter over EEBUS.
 
-## Manipulate a value over EEBUS
+## Run it
 
-Two EEBUS peers must trust each other's SKI, and the higher SKI initiates the
-connection — so both SKIs are provided.
+Peers trust each other by **SKI** (printed on startup, saved in `.eebus/` /
+`.gateway/`). Start 1 and 2, then copy each printed `ski=...` into the other's flag.
 
+**1 — inverter** (note its `ski=...`)
 ```powershell
-# 1) Get the guard SKI (prints ski=..., stored in .energyguard/, then idles — stop it)
-go run ./cmd/eebus-energyguard
-
-# 2) Inverter, trusting the guard SKI
-go run ./cmd/eebus-inverter-simulator -eebus-port 47711 -eebus-interface Wi-Fi -remote-ski <GUARD_SKI>
-
-# 3) Guard, writing a 3000 W limit to the inverter
-go run ./cmd/eebus-energyguard -eebus-port 47712 -eebus-interface Wi-Fi -inverter-ski <SIMULATOR_SKI> -limit-w 3000
+go run ./cmd/eebus-inverter-simulator -eebus-port 47711 -eebus-interface Wi-Fi -remote-ski <GATEWAY_SKI>
 ```
 
-Success: the inverter status log changes from `mode=normal ... limit=none` to
-`mode=curtailed pvW=3000 ... limit=3000W`. Change `-limit-w` for a different value.
-
-## Test with the official client (optional)
-
-The official `enbility/eebus-go` `hems` example also connects and exchanges data:
-
+**2 — gateway** (note its `ski=...`; HTTP on :8090)
 ```powershell
-# generate its identity once — save the cert/key blocks to hems.crt / hems.key, note its SKI
-go run github.com/enbility/eebus-go/cmd/hems@v0.7.0 4712
+go run ./cmd/eebus-gateway -eebus-port 47712 -eebus-interface Wi-Fi -inverter-ski <INVERTER_SKI> -http 127.0.0.1:8090
+```
 
-# then run both sides (two terminals)
-go run ./cmd/eebus-inverter-simulator -eebus-interface Wi-Fi -remote-ski <HEMS_SKI>
-go run github.com/enbility/eebus-go/cmd/hems@v0.7.0 4712 <SIMULATOR_SKI> hems.crt hems.key
+You can already control it over HTTP now:
+```powershell
+Invoke-RestMethod http://127.0.0.1:8090/status                                                                  # read live values
+Invoke-RestMethod http://127.0.0.1:8090/limit -Method Post -ContentType application/json -Body '{"watts":3000}'  # set 3000 W
+Invoke-RestMethod http://127.0.0.1:8090/limit -Method Post -ContentType application/json -Body '{"reset":true}'  # clear
+```
+
+**3 — Matter device** (prints a pairing code)
+```powershell
+cd matter-node; node device.js
+```
+
+**4 — Matter controller** (commissions, then gives a prompt)
+```powershell
+cd matter-node; node controller.js
+# matter> on     -> inverter curtails to 3000 W (mode=curtailed pvW=3000)
+# matter> off    -> back to normal
+# matter> status -> show on/off
 ```
 
 ## Notes
 
-- SPINE measurements published: `acPowerTotal`, `acEnergyProduced`, `stateOfCharge`, `acVoltage`, `acFrequency`.
-- `mdns: Failed to set multicast interface` and occasional `TLS handshake error ... EOF` are harmless.
-- Discovery uses mDNS, so both peers must be on the same LAN. Different networks need an L2 VPN (e.g. ZeroTier) or an mDNS reflector.
+- SKIs are printed on startup and persisted (`.eebus/`, `.gateway/`); reuse them next time.
+- `mdns: Failed to set multicast interface` warnings are harmless. Both peers must be on the same LAN.
+- Run the Go tests with `go test ./...`.
 
-## Layout
+## Design
 
-```text
-cmd/eebus-inverter-simulator   inverter entrypoint + status logging
-cmd/eebus-energyguard          energy guard client (writes production limit)
-internal/eebus/service.go      EEBUS SHIP/TLS + SPINE implementation
-internal/inverter/simulator.go inverter physics simulation
+The project bridges two standards — **Matter** (consumer smart-home) and **EEBUS**
+(energy management) — so a Matter controller can **set** and **read** an EEBUS
+inverter's production limit. Each layer uses the official library for its protocol
+(`matter.js` for Matter, `enbility/eebus-go` for EEBUS), so the same setup would
+interoperate with real devices.
+
+```mermaid
+flowchart LR
+    subgraph matter["Matter world (matter.js)"]
+        C["controller.js<br/>Matter controller"]
+        D["device.js<br/>Matter On/Off device"]
+    end
+    subgraph eebus["EEBUS world (enbility/eebus-go, SHIP/TLS + SPINE)"]
+        G["gateway<br/>Energy Guard + HTTP API"]
+        I["inverter<br/>EEBUS device + physics sim"]
+    end
+
+    C -->|"Matter: commission + OnOff"| D
+    D -->|"HTTP: POST /limit, GET /status"| G
+    G -->|"eg/lpp: write limit"| I
+    I -->|"ma/mpc: read meter"| G
 ```
 
-## Test
+**What each part does**
 
-```powershell
-go test ./...
-```
+- **inverter** — a real EEBUS device. A small physics model generates PV power on a
+  daylight curve; it publishes measurements and accepts an active-power production
+  limit via the `cs/lpp` use case.
+- **gateway** — an EEBUS Energy Guard. It **writes** the limit to the inverter
+  (`eg/lpp`) and **reads** its live meter values (`ma/mpc`), exposing both through a
+  tiny HTTP API (`POST /limit`, `GET /status`).
+- **device.js** — the Matter representation of the limit switch. `on`/`off` map to
+  `POST /limit`; on startup it reads `GET /status` and aligns the switch to the
+  inverter's real state.
+- **controller.js** — a Matter controller (the chip-tool equivalent): it commissions
+  the device and offers an interactive `on/off/status` prompt.
+
+**Two flows**
+
+1. **Set the limit (write):** `controller on` → `device.js` → `POST /limit` → gateway
+   `eg/lpp` → inverter curtails (`mode=curtailed pvW=3000`).
+2. **Read the meter (read):** `GET /status` → gateway `ma/mpc` reads the inverter's
+   live power / energy / frequency over EEBUS → JSON.
+
+Because both sides speak standard protocols, swapping the simulator for a real EEBUS
+inverter — or the controller for Apple Home / chip-tool — needs no code changes.

@@ -1,6 +1,13 @@
+# EEBUS identities / certificates (generated at first run)
 .eebus/
 .energyguard/
-*.exe
+.gateway/
 hems.crt
 hems.key
 hems_raw.txt
+
+# Build artifacts
+*.exe
+
+# Node.js (matter-node)
+matter-node/node_modules/

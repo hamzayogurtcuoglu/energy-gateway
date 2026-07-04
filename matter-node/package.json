@@ -1,0 +1,16 @@
+{
+  "name": "eebus-matter-node",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Official matter.js Matter node that maps an On/Off command to an EEBUS production limit via the Go gateway.",
+  "scripts": {
+    "device": "node device.js",
+    "controller": "node controller.js"
+  },
+  "dependencies": {
+    "@matter/examples": "^0.15.6",
+    "@matter/main": "^0.17.0",
+    "@project-chip/matter.js": "^0.17.4"
+  }
+}
