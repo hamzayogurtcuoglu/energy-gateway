@@ -23,7 +23,7 @@ import (
 	"github.com/enbility/spine-go/model"
 	"github.com/enbility/spine-go/util"
 
-	"eebus-inverter-simulator/internal/inverter"
+	"energy-gateway/internal/inverter"
 )
 
 type Config struct {

@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"eebus-inverter-simulator/internal/eebus"
-	"eebus-inverter-simulator/internal/inverter"
+	"energy-gateway/internal/eebus"
+	"energy-gateway/internal/inverter"
 )
 
 func main() {

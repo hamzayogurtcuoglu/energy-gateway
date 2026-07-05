@@ -1,4 +1,4 @@
-// Command eebus-gateway is a small protocol-routing gateway.
+// Command gateway is a small protocol-routing gateway.
 //
 // It exposes one HTTP API (POST /limit, GET /status) and routes each request to
 // a backend device by its "target": the EEBUS inverter (eg/lpp + ma/mpc) or a

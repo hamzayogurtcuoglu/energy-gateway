@@ -1,4 +1,4 @@
-module eebus-inverter-simulator
+module energy-gateway
 
 go 1.22.0
 

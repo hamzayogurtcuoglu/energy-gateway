@@ -9,7 +9,7 @@ import (
 
 	"github.com/simonvetter/modbus"
 
-	"eebus-inverter-simulator/internal/modbusmap"
+	"energy-gateway/internal/modbusmap"
 )
 
 // modbusBackend controls a Modbus device: it writes the production limit into

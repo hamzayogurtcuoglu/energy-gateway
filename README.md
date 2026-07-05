@@ -12,7 +12,7 @@ libraries: `enbility/eebus-go`, `simonvetter/modbus`, `matter.js`.
 | --- | --- |
 | `cmd/eebus-inverter-simulator` | Inverter #1 — a real **EEBUS** device (`cs/lpp` + measurements) |
 | `cmd/modbus-inverter-simulator` | Inverter #2 — a **Modbus TCP** device (holding + input registers) |
-| `cmd/eebus-gateway` | Protocol-routing gateway: routes each request to `target` (EEBUS or Modbus); HTTP API |
+| `cmd/gateway` | Protocol-routing gateway: routes each request to `target` (EEBUS or Modbus); HTTP API |
 | `matter-node/device.js` | Matter device with **two** On/Off switches (one per target) |
 | `matter-node/controller.js` | Matter controller — commissions + interactive `<device> on/off` |
 | `cmd/eebus-energyguard` | Optional: standalone EEBUS limit writer (no Matter) |
@@ -55,7 +55,7 @@ go run ./cmd/modbus-inverter-simulator -modbus-url tcp://0.0.0.0:5502
 
 **3 — gateway** (note its `ski=...`; HTTP on :8090; talks to both devices)
 ```powershell
-go run ./cmd/eebus-gateway -eebus-port 47712 -eebus-interface Wi-Fi -inverter-ski <INVERTER_SKI> -modbus-url tcp://127.0.0.1:5502 -http 127.0.0.1:8090
+go run ./cmd/gateway -eebus-port 47712 -eebus-interface Wi-Fi -inverter-ski <INVERTER_SKI> -modbus-url tcp://127.0.0.1:5502 -http 127.0.0.1:8090
 ```
 
 You can already control both over HTTP now (pick the device with `target`):

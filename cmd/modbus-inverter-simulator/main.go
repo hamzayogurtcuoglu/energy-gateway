@@ -18,8 +18,8 @@ import (
 
 	"github.com/simonvetter/modbus"
 
-	"eebus-inverter-simulator/internal/inverter"
-	"eebus-inverter-simulator/internal/modbusmap"
+	"energy-gateway/internal/inverter"
+	"energy-gateway/internal/modbusmap"
 )
 
 // handler bridges Modbus register access to the inverter simulator.

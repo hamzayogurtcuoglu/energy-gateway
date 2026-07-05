@@ -15,7 +15,7 @@ import (
 	spineapi "github.com/enbility/spine-go/api"
 	"github.com/enbility/spine-go/model"
 
-	"eebus-inverter-simulator/internal/eebuscert"
+	"energy-gateway/internal/eebuscert"
 )
 
 // eebusBackend controls the EEBUS inverter: it writes the production limit
