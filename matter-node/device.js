@@ -1,18 +1,19 @@
 /**
- * Official matter.js Matter node (device) for the EEBUS gateway demo.
+ * Official matter.js Matter node (device) for the multi-protocol gateway demo.
  *
- * It exposes a standard On/Off Plug-in Unit. Any Matter controller (Apple Home,
- * Google Home, chip-tool, matter.js shell/controller) can toggle it:
+ * It exposes TWO On/Off Plug-in Units — one per backend device behind the
+ * gateway:
+ *   - "inverter" -> gateway target "inverter" (EEBUS)
+ *   - "modbus"   -> gateway target "modbus"   (Modbus TCP)
  *
- *   Matter ON  -> POST /limit { watts: LIMIT_W }   -> gateway writes EG-LPP limit -> inverter curtails
- *   Matter OFF -> POST /limit { reset: true }       -> gateway clears the limit    -> inverter back to normal
+ * Turning a switch ON sets that device's production limit; OFF clears it. The
+ * Matter side never knows the field protocol — the gateway routes by target. On
+ * startup each switch is aligned to its device's real state read from the
+ * gateway.
  *
- * On startup it reads the inverter's real limit state from the gateway and
- * aligns the switch to it, so the switch reflects reality (not a stale value).
- *
- * Flow: Matter controller --Matter--> this node --HTTP--> Go gateway --EEBUS--> inverter
+ * Flow: Matter controller --Matter--> this node --HTTP--> gateway --(EEBUS|Modbus)--> device
  */
-import { Endpoint, ServerNode } from "@matter/main";
+import { ServerNode } from "@matter/main";
 import { OnOffPlugInUnitDevice } from "@matter/main/devices/on-off-plug-in-unit";
 
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://127.0.0.1:8090";
@@ -32,62 +33,72 @@ async function callGateway(body) {
     }
 }
 
+async function readStatus() {
+    const res = await fetch(`${GATEWAY_URL}/status`);
+    if (!res.ok) {
+        throw new Error(`gateway status ${res.status}`);
+    }
+    return res.json();
+}
+
 const node = await ServerNode.create({
     id: "eebus-matter-node",
     network: { port: 5540 },
     commissioning: { passcode: 20202021, discriminator: 3840 },
     productDescription: {
-        name: "EEBUS Inverter Limit",
+        name: "Gateway Limit Switches",
         deviceType: OnOffPlugInUnitDevice.deviceType,
     },
     basicInformation: {
         vendorName: "Demo",
         vendorId: 0xfff1,
-        productName: "EEBUS Production Limit Switch",
+        productName: "Gateway Limit Switches",
         productId: 0x8000,
     },
 });
 
-const limitSwitch = await node.add(OnOffPlugInUnitDevice, { id: "limit" });
+// addSwitch creates an On/Off endpoint bound to a gateway target and returns a
+// function that aligns the switch to that device's real state at startup.
+async function addSwitch(id, target) {
+    const sw = await node.add(OnOffPlugInUnitDevice, { id });
+    let syncing = false;
 
-// While we align the switch to the inverter's real state at startup, we must not
-// echo that programmatic change back to the gateway.
-let syncingFromGateway = false;
-
-limitSwitch.events.onOff.onOff$Changed.on(async on => {
-    if (syncingFromGateway) {
-        return;
-    }
-    if (on) {
-        console.log(`Matter ON  -> set production limit ${LIMIT_W} W`);
-        await callGateway({ watts: LIMIT_W, durationSeconds: DURATION_S });
-    } else {
-        console.log("Matter OFF -> clear production limit");
-        await callGateway({ reset: true });
-    }
-});
-
-// On startup, read the inverter's real limit state from the gateway and align
-// the Matter switch to it, so the switch always reflects reality instead of a
-// stale persisted value.
-node.lifecycle.online.on(async () => {
-    try {
-        const res = await fetch(`${GATEWAY_URL}/status`);
-        if (!res.ok) {
-            throw new Error(`gateway status ${res.status}`);
+    sw.events.onOff.onOff$Changed.on(async on => {
+        if (syncing) {
+            return;
         }
-        const status = await res.json();
-        const shouldBeOn = status.lastLimitW !== null && status.lastLimitW !== undefined;
-        syncingFromGateway = true;
-        await limitSwitch.set({ onOff: { onOff: shouldBeOn } });
-        syncingFromGateway = false;
-        console.log(
-            `initial state read from inverter: ${shouldBeOn ? `ON (limit ${status.lastLimitW} W)` : "OFF (no limit)"}`,
-        );
-    } catch (err) {
-        syncingFromGateway = false;
-        console.error(`could not read initial state from gateway: ${err.message}`);
-    }
+        if (on) {
+            console.log(`[${target}] Matter ON  -> set production limit ${LIMIT_W} W`);
+            await callGateway({ target, watts: LIMIT_W, durationSeconds: DURATION_S });
+        } else {
+            console.log(`[${target}] Matter OFF -> clear production limit`);
+            await callGateway({ target, reset: true });
+        }
+    });
+
+    return async () => {
+        try {
+            const all = await readStatus();
+            const status = all[target] ?? {};
+            const shouldBeOn = status.lastLimitW !== null && status.lastLimitW !== undefined;
+            syncing = true;
+            await sw.set({ onOff: { onOff: shouldBeOn } });
+            syncing = false;
+            console.log(`[${target}] initial state: ${shouldBeOn ? `ON (limit ${status.lastLimitW} W)` : "OFF (no limit)"}`);
+        } catch (err) {
+            syncing = false;
+            console.error(`[${target}] could not read initial state: ${err.message}`);
+        }
+    };
+}
+
+// Endpoint 1 = inverter (EEBUS), endpoint 2 = modbus.
+const syncInverter = await addSwitch("inverter", "inverter");
+const syncModbus = await addSwitch("modbus", "modbus");
+
+node.lifecycle.online.on(async () => {
+    await syncInverter();
+    await syncModbus();
 });
 
 await node.run();

@@ -1,17 +1,20 @@
-# EEBUS Inverter Simulator + Matter Gateway
+# EEBUS + Modbus Inverters with a Matter Routing Gateway
 
-A Go PV-inverter that runs as a **real EEBUS device**, plus a **Matter → EEBUS
-gateway** so you can read live meter values and set a production limit — from
-Matter or plain HTTP. All official libraries (`enbility/eebus-go`, `matter.js`).
+Two PV-inverter simulators speaking different field protocols (**EEBUS** and
+**Modbus**), plus a **protocol-routing gateway** so a Matter controller (or plain
+HTTP) can set/read each one's production limit **without knowing the protocol**.
+The gateway routes every request to the right device by a `target`. Official
+libraries: `enbility/eebus-go`, `simonvetter/modbus`, `matter.js`.
 
 ## Pieces
 
 | Path | What it is |
 | --- | --- |
-| `cmd/eebus-inverter-simulator` | The inverter — a real EEBUS device (`cs/lpp` + measurements) |
-| `cmd/eebus-gateway` | Matter→EEBUS bridge: writes the limit (`eg/lpp`), reads the meter (`ma/mpc`), HTTP API |
-| `matter-node/device.js` | Matter On/Off device — the Matter "face" of the limit |
-| `matter-node/controller.js` | Matter controller — commissions the device, interactive `on/off` |
+| `cmd/eebus-inverter-simulator` | Inverter #1 — a real **EEBUS** device (`cs/lpp` + measurements) |
+| `cmd/modbus-inverter-simulator` | Inverter #2 — a **Modbus TCP** device (holding + input registers) |
+| `cmd/eebus-gateway` | Protocol-routing gateway: routes each request to `target` (EEBUS or Modbus); HTTP API |
+| `matter-node/device.js` | Matter device with **two** On/Off switches (one per target) |
+| `matter-node/controller.js` | Matter controller — commissions + interactive `<device> on/off` |
 | `cmd/eebus-energyguard` | Optional: standalone EEBUS limit writer (no Matter) |
 
 ## Setup (once)
@@ -26,11 +29,14 @@ Matter or plain HTTP. All official libraries (`enbility/eebus-go`, `matter.js`).
 ## How it works
 
 ```text
-controller.js ──Matter──▶ device.js ──HTTP──▶ gateway ──EEBUS──▶ inverter
+                                     ┌─ target "inverter" ─EEBUS─▶ eebus-inverter-simulator
+controller.js ─Matter▶ device.js ─HTTP▶ gateway ─┤
+                                     └─ target "modbus"   ─Modbus─▶ modbus-inverter-simulator
 ```
 
-- **Set a limit:** Matter `on` (or `POST /limit`) → gateway writes it over EEBUS → inverter curtails.
-- **Read live values:** `GET /status` → gateway reads power / energy / frequency from the inverter over EEBUS.
+- **Set a limit:** Matter `on` (or `POST /limit {target}`) → gateway routes to that device's protocol → it curtails.
+- **Read live values:** `GET /status` → gateway reads each device (EEBUS `ma/mpc`, Modbus input registers) → JSON keyed by target.
+- The Matter side never knows the field protocol — the gateway is the only place that speaks EEBUS/Modbus.
 
 ## Run it
 
@@ -42,29 +48,35 @@ Peers trust each other by **SKI** (printed on startup, saved in `.eebus/` /
 go run ./cmd/eebus-inverter-simulator -eebus-port 47711 -eebus-interface Wi-Fi -remote-ski <GATEWAY_SKI>
 ```
 
-**2 — gateway** (note its `ski=...`; HTTP on :8090)
+**2 — Modbus inverter** (no SKI, just a TCP port)
 ```powershell
-go run ./cmd/eebus-gateway -eebus-port 47712 -eebus-interface Wi-Fi -inverter-ski <INVERTER_SKI> -http 127.0.0.1:8090
+go run ./cmd/modbus-inverter-simulator -modbus-url tcp://0.0.0.0:5502
 ```
 
-You can already control it over HTTP now:
+**3 — gateway** (note its `ski=...`; HTTP on :8090; talks to both devices)
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8090/status                                                                  # read live values
-Invoke-RestMethod http://127.0.0.1:8090/limit -Method Post -ContentType application/json -Body '{"watts":3000}'  # set 3000 W
-Invoke-RestMethod http://127.0.0.1:8090/limit -Method Post -ContentType application/json -Body '{"reset":true}'  # clear
+go run ./cmd/eebus-gateway -eebus-port 47712 -eebus-interface Wi-Fi -inverter-ski <INVERTER_SKI> -modbus-url tcp://127.0.0.1:5502 -http 127.0.0.1:8090
 ```
 
-**3 — Matter device** (prints a pairing code)
+You can already control both over HTTP now (pick the device with `target`):
+```powershell
+Invoke-RestMethod http://127.0.0.1:8090/status                                                                                    # read both devices
+Invoke-RestMethod http://127.0.0.1:8090/limit -Method Post -ContentType application/json -Body '{"target":"modbus","watts":3000}'   # limit Modbus
+Invoke-RestMethod http://127.0.0.1:8090/limit -Method Post -ContentType application/json -Body '{"target":"inverter","watts":4000}' # limit EEBUS
+Invoke-RestMethod http://127.0.0.1:8090/limit -Method Post -ContentType application/json -Body '{"target":"modbus","reset":true}'   # clear Modbus
+```
+
+**4 — Matter device** (prints a pairing code)
 ```powershell
 cd matter-node; node device.js
 ```
 
-**4 — Matter controller** (commissions, then gives a prompt)
+**5 — Matter controller** (commissions, then gives a prompt)
 ```powershell
 cd matter-node; node controller.js
-# matter> on     -> inverter curtails to 3000 W (mode=curtailed pvW=3000)
-# matter> off    -> back to normal
-# matter> status -> show on/off
+# matter> modbus on     -> Modbus device curtails to 3000 W
+# matter> inverter on   -> EEBUS inverter curtails to 3000 W
+# matter> status        -> show both switches
 ```
 
 ## Notes
@@ -75,49 +87,52 @@ cd matter-node; node controller.js
 
 ## Design
 
-The project bridges two standards — **Matter** (consumer smart-home) and **EEBUS**
-(energy management) — so a Matter controller can **set** and **read** an EEBUS
-inverter's production limit. Each layer uses the official library for its protocol
-(`matter.js` for Matter, `enbility/eebus-go` for EEBUS), so the same setup would
-interoperate with real devices.
+The project connects **Matter** (consumer smart-home) to energy devices that speak
+different field protocols — here an **EEBUS** inverter and a **Modbus** inverter.
+The gateway is a **protocol router**: the Matter side sends one command with a
+`target`, and the gateway translates it to that device's protocol. Adding a third
+protocol is just another backend behind the same HTTP API — the Matter side never
+changes.
 
 ```mermaid
 flowchart LR
     subgraph matter["Matter world (matter.js)"]
-        C["controller.js<br/>Matter controller"]
-        D["device.js<br/>Matter On/Off device"]
+        C["controller.js<br/>controller"]
+        D["device.js<br/>2 On/Off switches"]
     end
-    subgraph eebus["EEBUS world (enbility/eebus-go, SHIP/TLS + SPINE)"]
-        G["gateway<br/>Energy Guard + HTTP API"]
-        I["inverter<br/>EEBUS device + physics sim"]
+    subgraph gw["gateway (router)"]
+        R{"route by<br/>target"}
+        E["EEBUS backend<br/>eg/lpp + ma/mpc"]
+        M["Modbus backend<br/>register read/write"]
     end
+    I1["eebus-inverter-simulator<br/>(EEBUS device)"]
+    I2["modbus-inverter-simulator<br/>(Modbus device)"]
 
-    C -->|"Matter: commission + OnOff"| D
-    D -->|"HTTP: POST /limit, GET /status"| G
-    G -->|"eg/lpp: write limit"| I
-    I -->|"ma/mpc: read meter"| G
+    C -->|"Matter OnOff"| D
+    D -->|"HTTP /limit, /status (target)"| R
+    R -->|inverter| E
+    R -->|modbus| M
+    E -->|"EEBUS SHIP/SPINE"| I1
+    M -->|"Modbus TCP"| I2
 ```
 
 **What each part does**
 
-- **inverter** — a real EEBUS device. A small physics model generates PV power on a
-  daylight curve; it publishes measurements and accepts an active-power production
-  limit via the `cs/lpp` use case.
-- **gateway** — an EEBUS Energy Guard. It **writes** the limit to the inverter
-  (`eg/lpp`) and **reads** its live meter values (`ma/mpc`), exposing both through a
-  tiny HTTP API (`POST /limit`, `GET /status`).
-- **device.js** — the Matter representation of the limit switch. `on`/`off` map to
-  `POST /limit`; on startup it reads `GET /status` and aligns the switch to the
-  inverter's real state.
-- **controller.js** — a Matter controller (the chip-tool equivalent): it commissions
-  the device and offers an interactive `on/off/status` prompt.
+- **eebus / modbus inverter** — two devices sharing one physics model (`internal/inverter`),
+  each exposing it over its own protocol. The Matter/gateway side can't tell they're simulated.
+- **gateway** — holds one `backend` per device behind a common interface
+  (`SetLimit`/`Reset`/`Status`) plus a `map[target]backend`. `POST /limit {target}` and
+  `GET /status` route to the right backend; the HTTP layer never mentions EEBUS or Modbus.
+- **device.js** — exposes one Matter On/Off switch per target; each switch calls the gateway
+  with its `target`. On startup each switch is aligned to its device's real state.
+- **controller.js** — a Matter controller (chip-tool equivalent) with a `<device> on/off`
+  prompt that drives either switch.
 
-**Two flows**
+**The routing flow**
 
-1. **Set the limit (write):** `controller on` → `device.js` → `POST /limit` → gateway
-   `eg/lpp` → inverter curtails (`mode=curtailed pvW=3000`).
-2. **Read the meter (read):** `GET /status` → gateway `ma/mpc` reads the inverter's
-   live power / energy / frequency over EEBUS → JSON.
+`controller: modbus on` → `device.js` (target `modbus`) → `POST /limit {target:"modbus"}`
+→ gateway picks the Modbus backend → writes the holding register → the Modbus inverter
+curtails. Typing `inverter on` instead routes the identical flow over EEBUS — no Matter-side change.
 
-Because both sides speak standard protocols, swapping the simulator for a real EEBUS
-inverter — or the controller for Apple Home / chip-tool — needs no code changes.
+Because every tier speaks a standard protocol, the simulators could be replaced by real
+EEBUS/Modbus hardware, or the controller by Apple Home / chip-tool, without code changes.

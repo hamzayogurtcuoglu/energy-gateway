@@ -51,12 +51,14 @@ if (!controller.isCommissioned()) {
 
 const node = await controller.getNode(nodeId);
 
-// Log the live On/Off state whenever the device reports a change. The device
-// echoes its state back after every command, so this reflects the real switch
-// state in real time.
-node.events.attributeChanged.on(({ path: { attributeName }, value }) => {
+// endpoint 1 = inverter (EEBUS), endpoint 2 = modbus.
+const deviceNames = ["inverter", "modbus"];
+
+// Log the live On/Off state of each device whenever it reports a change.
+node.events.attributeChanged.on(({ path: { endpointId, attributeName }, value }) => {
     if (attributeName === "onOff") {
-        console.log(`[state] switch is now ${value ? "ON" : "OFF"}`);
+        const name = deviceNames[endpointId - 1] ?? `endpoint ${endpointId}`;
+        console.log(`[state] ${name} is now ${value ? "ON" : "OFF"}`);
     }
 });
 
@@ -68,52 +70,66 @@ if (!node.initialized) {
 }
 
 const devices = node.getDevices();
-const onOff = devices[0].getClusterClient(OnOff.Complete);
-if (onOff === undefined) {
-    throw new Error("device has no OnOff cluster");
+
+// Build a name -> OnOff client map. Endpoints are added in order on the device
+// side: endpoint 1 = inverter, endpoint 2 = modbus.
+const switches = {};
+devices.forEach((device, index) => {
+    const onOff = device.getClusterClient(OnOff.Complete);
+    const name = deviceNames[index];
+    if (onOff && name) {
+        switches[name] = onOff;
+    }
+});
+if (Object.keys(switches).length === 0) {
+    throw new Error("no On/Off devices found");
 }
 
-console.log(`initial state: ${(await onOff.getOnOffAttribute()) ? "ON" : "OFF"}`);
+async function printStates() {
+    for (const [name, onOff] of Object.entries(switches)) {
+        console.log(`  ${name}: ${(await onOff.getOnOffAttribute()) ? "ON" : "OFF"}`);
+    }
+}
 
-const help = "commands: on | off | toggle | status | help | quit";
-const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "matter> " });
+const targets = Object.keys(switches).join(", ");
+const help = `commands: <device> on|off|toggle  |  status  |  quit    (devices: ${targets})`;
+
+console.log("initial state:");
+await printStates();
 console.log(help);
+
+const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "matter> " });
 rl.prompt();
 
 rl.on("line", async line => {
-    const cmd = line.trim().toLowerCase();
+    const parts = line.trim().toLowerCase().split(/\s+/).filter(Boolean);
     try {
-        switch (cmd) {
-            case "on":
+        if (parts.length === 0) {
+            // nothing typed
+        } else if (["quit", "exit", "q"].includes(parts[0])) {
+            rl.close();
+            return;
+        } else if (["help", "?"].includes(parts[0])) {
+            console.log(help);
+        } else if (["status", "s"].includes(parts[0])) {
+            await printStates();
+        } else if (parts.length === 2 && switches[parts[0]]) {
+            const [name, action] = parts;
+            const onOff = switches[name];
+            if (action === "on") {
                 await onOff.on();
-                console.log("sent ON  -> inverter should curtail to the limit");
-                break;
-            case "off":
+                console.log(`[${name}] sent ON`);
+            } else if (action === "off") {
                 await onOff.off();
-                console.log("sent OFF -> inverter back to normal");
-                break;
-            case "toggle":
-            case "t":
+                console.log(`[${name}] sent OFF`);
+            } else if (action === "toggle" || action === "t") {
                 await onOff.toggle();
-                console.log("sent TOGGLE");
-                break;
-            case "status":
-            case "s":
-                console.log(`current state: ${(await onOff.getOnOffAttribute()) ? "ON" : "OFF"}`);
-                break;
-            case "help":
-            case "?":
-                console.log(help);
-                break;
-            case "quit":
-            case "exit":
-            case "q":
-                rl.close();
-                return;
-            case "":
-                break;
-            default:
-                console.log(`unknown command: "${cmd}"  (${help})`);
+                console.log(`[${name}] sent TOGGLE`);
+            } else {
+                console.log(`unknown action "${action}"  (${help})`);
+            }
+        } else {
+            console.log(`unknown command  (${help})`);
         }
     } catch (error) {
         console.error(`command failed: ${error.message}`);
