@@ -2,10 +2,10 @@
 //
 // It exposes one HTTP API (POST /limit, GET /status) and routes each request to
 // a backend device by its "target": the EEBUS inverter (eg/lpp + ma/mpc) or a
-// Modbus device (Modbus TCP). The Matter side never needs to know which field
+// Modbus device (Modbus TCP). The HTTP client never needs to know which field
 // protocol is used.
 //
-//	Matter node --HTTP--> this gateway --(EEBUS | Modbus)--> device
+//	HTTP client --HTTP--> this gateway --(EEBUS | Modbus)--> device
 package main
 
 import (
@@ -33,7 +33,7 @@ func main() {
 	ifaces := flag.String("eebus-interface", "", "network interface names for mDNS, e.g. Wi-Fi")
 	inverterSKI := flag.String("inverter-ski", "", "SKI of the EEBUS inverter to control")
 	modbusURL := flag.String("modbus-url", "tcp://127.0.0.1:5502", "Modbus TCP URL of the Modbus device")
-	httpAddr := flag.String("http", "127.0.0.1:8090", "local bridge API address the Matter node calls")
+	httpAddr := flag.String("http", "127.0.0.1:8090", "local HTTP API address to listen on")
 	certPath := flag.String("cert", ".gateway/gateway.crt", "TLS certificate path")
 	keyPath := flag.String("key", ".gateway/gateway.key", "TLS private key path")
 	flag.Parse()

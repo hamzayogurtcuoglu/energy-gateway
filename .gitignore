@@ -8,6 +8,3 @@ hems_raw.txt
 
 # Build artifacts
 *.exe
-
-# Node.js (matter-node)
-matter-node/node_modules/

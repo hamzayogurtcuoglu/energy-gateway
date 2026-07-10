@@ -33,7 +33,7 @@ type eebusBackend struct {
 }
 
 func newEEBUSBackend(logger *slog.Logger, port int, ifaces []string, inverterSKI, certPath, keyPath string) (*eebusBackend, string, error) {
-	certificate, ski, err := eebuscert.LoadOrCreate(certPath, keyPath, "EEBUS-Matter-Gateway")
+	certificate, ski, err := eebuscert.LoadOrCreate(certPath, keyPath, "EEBUS-Gateway")
 	if err != nil {
 		return nil, "", fmt.Errorf("certificate: %w", err)
 	}
@@ -47,7 +47,7 @@ func newEEBUSBackend(logger *slog.Logger, port int, ifaces []string, inverterSKI
 	if err != nil {
 		return nil, "", fmt.Errorf("configuration: %w", err)
 	}
-	configuration.SetAlternateIdentifier("EEBUS-Matter-Gateway-555555555")
+	configuration.SetAlternateIdentifier("EEBUS-Gateway-555555555")
 	if len(ifaces) > 0 {
 		configuration.SetInterfaces(ifaces)
 	}
